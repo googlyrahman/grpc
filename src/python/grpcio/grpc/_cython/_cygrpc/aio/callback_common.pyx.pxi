@@ -133,8 +133,15 @@ async def _receive_message(GrpcCallWrapper grpc_call_wrapper,
         _LOGGER.debug('Failed to receive any message from Core: %s', e)
     # NOTE(lidiz) The returned message might be an empty bytes (aka. b'').
     # Please explicitly check if it is None or falsey string object!
-    return receive_op.message()
 
+    wrapper = receive_op.message()
+    if wrapper is None:
+        return None
+    
+    # print("Offloading the wrapper to separate thread....")
+    result = await loop.run_in_executor(None, wrapper.to_bytes)
+    # print("the task is done")
+    return result
 
 async def _send_message(GrpcCallWrapper grpc_call_wrapper,
                         bytes message,

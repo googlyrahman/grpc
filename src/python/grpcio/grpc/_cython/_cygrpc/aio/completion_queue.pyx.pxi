@@ -167,6 +167,7 @@ cdef class PollerCompletionQueue(BaseCompletionQueue):
 
             context = <CallbackContext *>event.tag
             loop = <object>context.loop
+            # print(f"Hitting handle events....", loop is context_loop)
             if loop is context_loop:
                 # Executes callbacks: complete the future
                 CallbackWrapper.functor_run(
@@ -179,3 +180,4 @@ cdef class PollerCompletionQueue(BaseCompletionQueue):
                     <CallbackWrapper>context.callback_wrapper,
                     event.success
                 )
+            # print(f"Hitting handle events completed... ")

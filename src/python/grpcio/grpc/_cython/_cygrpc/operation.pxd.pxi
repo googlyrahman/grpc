@@ -74,12 +74,15 @@ cdef class ReceiveInitialMetadataOperation(Operation):
   cdef void c(self) except *
   cdef void un_c(self) except *
 
+cdef class ByteBufferWrapper:
+  cdef grpc_byte_buffer* c_buffer
+  cdef set_buffer(self, grpc_byte_buffer* buf)
 
 cdef class ReceiveMessageOperation(Operation):
 
   cdef readonly int _flags
   cdef grpc_byte_buffer *_c_message_byte_buffer
-  cdef bytes _message
+  cdef object _message
 
   cdef void c(self) except *
   cdef void un_c(self) except *

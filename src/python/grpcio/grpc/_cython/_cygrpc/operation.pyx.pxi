@@ -12,6 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from libc.stdlib cimport malloc, free
+from libc.string cimport memcpy
+from libc.stdio cimport printf
+from cpython.bytes cimport PyBytes_FromStringAndSize, PyBytes_AsString
+import time
 
 cdef class Operation:
 
@@ -142,6 +147,61 @@ cdef class ReceiveInitialMetadataOperation(Operation):
     return self._initial_metadata
 
 
+cdef class ByteBufferWrapper:
+
+    def __cinit__(self):
+        self.c_buffer = NULL
+
+    cdef set_buffer(self, grpc_byte_buffer* buf):
+        self.c_buffer = buf
+
+    def to_bytes(self):
+        """Executes the memory copy into a Python bytes object."""
+        if self.c_buffer == NULL:
+            return None
+        
+        cdef grpc_byte_buffer_reader message_reader
+        cdef bint message_reader_status
+        cdef grpc_slice message_slice
+        cdef size_t message_slice_length
+        cdef size_t total_length
+        cdef size_t offset = 0
+        cdef bytes result
+        cdef char* result_ptr
+
+        total_length = grpc_byte_buffer_length(self.c_buffer)
+        result = PyBytes_FromStringAndSize(NULL, total_length)
+        result_ptr = PyBytes_AsString(result)
+
+        message_reader_status = grpc_byte_buffer_reader_init(
+            &message_reader, self.c_buffer)
+            
+        if message_reader_status:
+            # You are now running safely inside the thread pool executor
+            while grpc_byte_buffer_reader_next(&message_reader, &message_slice):
+                message_slice_length = grpc_slice_length(message_slice)
+                if message_slice_length > 0:
+                    memcpy(result_ptr + offset, grpc_slice_start_ptr(message_slice), message_slice_length)
+                    offset += message_slice_length
+                grpc_slice_unref(message_slice)
+            
+            grpc_byte_buffer_reader_destroy(&message_reader)
+        else:
+            result = None
+            
+        # Clean up C memory now that we are done
+        grpc_byte_buffer_destroy(self.c_buffer)
+        self.c_buffer = NULL
+        
+        return result
+
+    def __dealloc__(self):
+        # Fallback to prevent memory leaks if to_bytes() is never called
+        if self.c_buffer != NULL:
+            grpc_byte_buffer_destroy(self.c_buffer)
+            self.c_buffer = NULL
+
+
 cdef class ReceiveMessageOperation(Operation):
 
   def __cinit__(self, flags):
@@ -157,26 +217,16 @@ cdef class ReceiveMessageOperation(Operation):
         &self._c_message_byte_buffer)
 
   cdef void un_c(self) except *:
-    cdef grpc_byte_buffer_reader message_reader
-    cdef bint message_reader_status
-    cdef grpc_slice message_slice
-    cdef size_t message_slice_length
-    cdef void *message_slice_pointer
+    cdef ByteBufferWrapper wrapper
+
     if self._c_message_byte_buffer != NULL:
-      message_reader_status = grpc_byte_buffer_reader_init(
-          &message_reader, self._c_message_byte_buffer)
-      if message_reader_status:
-        message = bytearray()
-        while grpc_byte_buffer_reader_next(&message_reader, &message_slice):
-          message_slice_pointer = grpc_slice_start_ptr(message_slice)
-          message_slice_length = grpc_slice_length(message_slice)
-          message += (<char *>message_slice_pointer)[:message_slice_length]
-          grpc_slice_unref(message_slice)
-        grpc_byte_buffer_reader_destroy(&message_reader)
-        self._message = bytes(message)
-      else:
-        self._message = None
-      grpc_byte_buffer_destroy(self._c_message_byte_buffer)
+      # Create wrapper and transfer ownership of the C memory
+      wrapper = ByteBufferWrapper()
+      wrapper.set_buffer(self._c_message_byte_buffer)
+      self._message = wrapper
+      
+      # Set to NULL so gRPC doesn't try to clean it up here
+      self._c_message_byte_buffer = NULL
     else:
       self._message = None
 
